@@ -1,0 +1,243 @@
+---
+title: "Qualitative movement analysis for the WB"
+output: html_document
+---
+
+#Questions:
+
+##Space use variability among speices in the WB
+###  Species space use
+1. Do species use different rivers?
+2. Do species use different sections?
++ Capture data
++ wanding data?
+
+###Species movement patterns
+Do species move differently?
+1. Movements among tribs
+2. Movements based on captures
+3. Movements based on antennas? (prob not)
+4. Do the density/biomasses of the donor and recip sections matter?
+
+
+
+```{r libraries}
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(lubridate)
+library(gridExtra)
+```
+
+```{r load raw data}
+load(file='coreData')
+
+graphsDir <- './graphs/'
+```
+
+
+```{r a look at raw data}
+
+
+ggplot(cd[ cd$inside ,], aes( section ) ) +
+  geom_freqpoly( aes(color=species),binwidth=1.1 ) +
+  scale_y_continuous(limits=c( 0.1,1500 )) +
+  facet_wrap( ~river )
+```
+
+```{r Do species use different rivers?}
+
+#simple count of obs by spp and river
+count <- cd %>% group_by(species,river) %>% tally() %>% bind_rows(data.frame(species=c("ats","ats","bnt"),river=c("wb mitchell","wb obear","wb obear"),n=c(0,0,0)))    
+
+# bind_rows undoes the ordered factor - need to redo to get right order for graph
+count$riverOrdered <- factor(count$river,labels=c("WB","OL",'OS',"IL"), levels = c("west brook","wb jimmy","wb mitchell","wb obear"), ordered=T)
+
+countByRiverSpecies <- 
+  ggplot( count, aes(riverOrdered,n) ) +
+    geom_bar(aes(fill=species), position = "dodge",stat="identity") +
+    scale_fill_grey(name = "Species") +
+      scale_x_discrete('River') +
+      scale_y_continuous("Count") +
+      theme_bw(base_size=25) +
+      theme( legend.position=c(0.9,0.9) )
+
+ggsave( file=paste0(graphsDir,'countByRiverSpecies.png'), plot=countByRiverSpecies, dpi=600 , width=6,height=5, units='in', scale=2 )
+
+```
+
+Calculate movement
+```{r calculate and plot movement Tribs}
+
+cd <- cd %>%
+        group_by(tag) %>%
+        mutate( sectionLagged = lead( section ),
+                detectionDateLagged = lead( detectionDate ),
+                riverOrderedLagged = lead( riverOrdered ),
+                moveDist = (section-sectionLagged) * 20,
+                moveTime = as.numeric((difftime(detectionDateLagged,detectionDate,units="days"))) / 30.5 , # in 'months'
+                moveRate = moveDist/moveTime, 
+                fromTo = paste(riverOrdered,riverOrderedLagged,sep="_")) %>%
+   #     filter( moveTime >= 1 & moveTime < 365 ) %>%
+        mutate( month = as.numeric( month( detectionDate ) ) )
+
+table(cd$species,cd$fromTo)
+```                
+
+Plot movement
+```{r plot movement1}
+
+# graph moves based on the proportion of fish from the 'from' river/species
+rCount <- 
+  filter( cd, !is.na( riverOrderedLagged ) ) %>%
+  count(riverOrdered,species) 
+
+rrCount <- 
+filter( cd, !is.na( riverOrderedLagged ) ) %>%
+  group_by(riverOrdered, riverOrderedLagged, species) %>%
+  tally() %>%
+  left_join( .,rCount, by = c("riverOrdered","species") ) %>%
+  mutate( prop = n.x / n.y ) %>%
+  complete( riverOrdered,riverOrderedLagged,species ) %>%  # not sure why this adds 4* the # of rows
+  distinct() 
+  #mutate( n.y = ifelse( is.na( n.y ), 0, n.y ) )
+  
+propMove <- 
+  ggplot( rrCount, aes( x=riverOrderedLagged, y=prop ) ) +
+    geom_bar( stat = "identity" ) +
+    scale_fill_grey(name = "Season") +
+    scale_x_discrete('Second river') +
+    scale_y_continuous("Proportion") +
+    theme_bw(base_size=25) +
+    theme( legend.position=c(0.95,0.9) ) +
+    geom_text( aes(label=(n.y), x=4.2,y=1.025 ), size=6, family="sans" ) +
+    facet_grid( species ~ riverOrdered )  
+
+  ggsave( file=paste0(graphsDir,'propMove.png'), plot=propMove, dpi=600 , width=9,height=5, units='in', scale=2 )
+  
+
+```
+
+
+Plot seasonal movement
+```{r plot movement}
+
+# graph moves based on the proportion of fish from the 'from' river/species
+rCountSeason <- 
+  filter( cd, !is.na( riverOrderedLagged ) ) %>%
+  count(riverOrdered,species,season) 
+
+rrCountSeason <- 
+filter( cd, !is.na( riverOrderedLagged ) ) %>%
+  group_by(riverOrdered, riverOrderedLagged, species, season) %>%
+  tally() %>%
+  left_join( .,rCountSeason, by = c("riverOrdered","species","season") ) %>%
+  mutate( prop = n.x / n.y ) %>%
+  complete( riverOrdered,riverOrderedLagged,species,season ) %>%  # not sure why this adds 4* the # of rows
+  distinct() 
+  #mutate( n.y = ifelse( is.na( n.y ), 0, n.y ) )
+  
+propMoveSeason <- 
+  ggplot( rrCountSeason, aes( x=riverOrderedLagged, y=prop ) ) +
+    geom_bar( stat = "identity" ) +
+    scale_fill_grey(name = "Season") +
+    scale_x_discrete('Second river') +
+    scale_y_continuous("Proportion") +
+    theme_bw(base_size=25) +
+    theme( legend.position=c(0.95,0.9) ) +
+    geom_text( aes(label=(n.y), x=4.2,y=1.025 ), size=6, family="sans" ) +
+    facet_grid( species ~ riverOrdered + season )  
+
+  ggsave( file=paste0(graphsDir,'propMoveSeason.png'), plot=propMoveSeason, dpi=600 , width=9,height=5, units='in', scale=2 )
+  
+
+```
+
+```{r counts and biomasses by section}
+
+# Nested residuals (for means) and proportions (for counts)  
+
+bySn <-   cd %>%
+  group_by(sampleNumber) %>%
+  summarize( bioBySnSum = sum( observedWeight, na.rm = T ),
+             bioBySnMean = mean( observedWeight, na.rm = T ),
+             countBySn = n() )
+  
+bySnRivSec <- cd  %>%
+       group_by( sampleNumber, riverOrdered, section ) %>%
+       summarize( bioBySnRivSecSum = sum( observedWeight, na.rm = T  ),
+                  bioBySnRivSecMean = mean( observedWeight, na.rm = T  ),
+                  countBySnRivSec = n() ) %>%
+       left_join( .,bySn, by = c("sampleNumber") ) %>%
+       mutate( bioBySnRivSecResid = bioBySnRivSecMean - bioBySnMean,
+               countBySnRivSecProp = countBySnRivSec / countBySn )
+
+bySnRivSecSpp <- cd  %>%
+       group_by( species, sampleNumber, riverOrdered, section ) %>%
+       summarize( bioBySnRivSecSppSum = sum( observedWeight, na.rm = T  ),
+                  bioBySnRivSecSppMean = mean( observedWeight, na.rm = T  ),
+                  countBySnRivSecSpp = n() ) %>%
+       left_join( .,bySnRivSec, by = c("sampleNumber", "riverOrdered", "section") ) %>%
+       mutate(   bioBySnRivSecSppResid =  bioBySnRivSecSppMean - bioBySnRivSecMean,
+               countBySnRivSecSppProp = countBySnRivSecSpp /   countBySnRivSec )
+
+#Check data  
+#ggplot( bySnRivSecSpp, aes( countBySnRivSecSpp,bioBySnRivSecSppSum, color=section) ) + geom_point() + facet_grid(riverOrdered~species)  
+ 
+cd2 <- left_join( cd, bySnRivSecSpp, by = c("species","sampleNumber", "riverOrdered", "section") ) %>%
+  mutate( moved = !( section == sectionLagged & riverOrdered == riverOrderedLagged ) )
+         
+
+```
+
+```{r biomass and movement}
+#ggplot( cd2, aes( bioBySnRivSecSppResid, moveDist ) ) +
+ggplot( cd2, aes( bioBySnRivSecResid, moveDist ) ) +
+  geom_point() +
+  geom_smooth() +
+  facet_grid( riverOrdered~species )
+
+ggplot( cd2, aes( moved,bioBySnRivSecSppResid ) ) +
+  geom_boxplot() +
+  facet_grid( species ~ riverOrdered )
+
+#m0 <- glm( moved ~ biomassBySection*species*riverOrdered, family="binomial",data=cd2)
+
+```
+
+```{r body size and movement}
+
+ggplot( cd2, aes( moved,observedLength ) ) +
+  geom_boxplot() +
+  facet_grid( species ~ riverOrdered )
+
+ggplot( filter(cd2,!is.na(season) & observedLength < 200  ), aes( observedLength, color=moved ) ) +
+  geom_freqpoly() +
+  facet_grid( species + season ~ riverOrdered, scales = 'free_y' )
+
+binomial_smooth <- function(...) {
+   geom_smooth(method = "glm", method.args = list(family = "binomial"), ...)
+ }
+
+ggplot( filter(cd2,!is.na(season) & observedLength < 200  ), aes( x=observedLength, y=as.numeric(moved ), color=species ) ) +
+  geom_point(alpha = 0.05) +
+  binomial_smooth() +
+  facet_wrap( ~ riverOrdered )
+ggplot( filter(cd2,!is.na(season) & observedLength < 200  ), aes( x=observedLength, y=as.numeric(moved ), color=riverOrdered ) ) +
+  geom_point(alpha = 0.05) +
+  binomial_smooth() +
+  facet_wrap( ~ species )
+
+ggplot( filter(cd2,!is.na(season) & observedLength < 200 & moved ), aes( x=observedLength, y=moveDist, color=riverOrdered ) ) +
+  geom_point(alpha = 0.05) +
+  geom_smooth() +
+  facet_wrap( riverOrdered~ species )
+
+ggplot( filter(cd2,!is.na(season) & observedLength < 200  ), aes( x=observedLength, y=as.numeric(moved ) ) ) +
+  geom_point(alpha = 0.05) +
+  binomial_smooth() +
+  facet_grid( season ~ species + riverOrdered )
+
+length, density-leave, density-stop, season, river, species
+```
+
